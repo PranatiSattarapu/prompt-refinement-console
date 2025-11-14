@@ -1,10 +1,18 @@
 import streamlit as st
-from drive_manager import list_data_files, get_drive_service
+from drive_manager import list_data_files, get_drive_service, api_get_files_in_folder, FOLDER_ID_PATIENT_DATA
 from workflow import generate_response # Assuming this is your Claude integration
 st.write("Google key loaded:", "GOOGLE_SERVICE_ACCOUNT" in st.secrets)
 
 service = get_drive_service()
 st.write("Drive service object:", service)
+
+st.write("Google key exists:", "GOOGLE_SERVICE_ACCOUNT" in st.secrets)
+
+service = get_drive_service()
+st.write("Drive service object:", service)
+
+if service:
+    st.write("Patient Data Folder:", api_get_files_in_folder(service, FOLDER_ID_PATIENT_DATA))
 # --- Streamlit Configuration ---
 st.set_page_config(page_title="Health Tutor Console", layout="wide")
 st.title("Prompt Refinement Console")
