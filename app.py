@@ -1,7 +1,10 @@
 import streamlit as st
-from drive_manager import list_data_files
+from drive_manager import list_data_files, get_drive_service
 from workflow import generate_response # Assuming this is your Claude integration
+st.write("Google key loaded:", "GOOGLE_SERVICE_ACCOUNT" in st.secrets)
 
+service = get_drive_service()
+st.write("Drive service object:", service)
 # --- Streamlit Configuration ---
 st.set_page_config(page_title="Health Tutor Console", layout="wide")
 st.title("Prompt Refinement Console")
