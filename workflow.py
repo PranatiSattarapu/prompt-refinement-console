@@ -19,24 +19,59 @@ client = Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
 # LOAD ALL FRAMEWORKS
 # ---------------------------------------------------------
 def load_frameworks():
-    """Load all framework files and extract function names."""
+    """Load all framework files, extract function names, and show detailed logs."""
+    print("\n========================")
+    print("🔎 Loading framework files...")
+    print("========================\n")
+
     service = get_drive_service()
+
+    print("📁 Framework folder ID:", FOLDER_ID_PROMPT_FRAMEWORK)
+
+    # Get files in the framework folder
     framework_files = api_get_files_in_folder(service, FOLDER_ID_PROMPT_FRAMEWORK)
+
+    print("🗂 Files returned from Drive:", [f["name"] for f in framework_files])
 
     frameworks = []
 
     for f in framework_files:
-        content = api_get_file_content(service, f["id"], f["mimeType"])
-        first_line = content.split("\n")[0].strip()
+        print("\n--------------------------------")
+        print("📄 Reading file:", f["name"])
+        print("--------------------------------")
 
-        if first_line.lower().startswith("function:"):
-            function_name = first_line.replace("Function:", "").strip()
+        # Load full content
+        content = api_get_file_content(service, f["id"], f["mimeType"])
+
+        if not content:
+            print("⚠️ File content EMPTY or unreadable.")
+            continue
+
+        # Extract first line
+        first_line = content.split("\n")[0]
+        print("🔍 Raw first line:", repr(first_line))
+
+        # Remove BOM + whitespace
+        clean_first_line = first_line.lstrip("\ufeff").strip()
+        print("✨ Cleaned first line:", repr(clean_first_line))
+
+        # Check for Function header
+        if clean_first_line.lower().startswith("function:"):
+            function_name = clean_first_line.replace("Function:", "").strip()
+            print("✅ Framework detected. Function name:", function_name)
+
             frameworks.append({
                 "name": function_name,
                 "content": content
             })
+        else:
+            print("❌ This file does NOT start with 'Function:' — skipped.")
+
+    print("\n📊 Total frameworks loaded:", len(frameworks))
+    print("========================\n")
 
     return frameworks
+
 
 
 # ---------------------------------------------------------
