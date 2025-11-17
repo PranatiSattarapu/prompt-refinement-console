@@ -38,16 +38,19 @@ st.markdown("""
     bottom: 0;
     left: 0;
     width: 100%;
-    padding: 15px 20px;
+    padding: 10px 20px 15px 20px;
     background: white;
     border-top: 1px solid #ddd;
     z-index: 999;
 }
+
 .chat-space {
-    padding-bottom: 160px; /* space for bottom bar */
+    padding-bottom: 130px; /* EXACT height of bottom bar */
+    margin-bottom: 0;
 }
 </style>
 """, unsafe_allow_html=True)
+
 
 # ---------------- CHAT HISTORY ----------------
 st.markdown('<div class="chat-space">', unsafe_allow_html=True)
@@ -62,7 +65,7 @@ st.markdown('</div>', unsafe_allow_html=True)
 st.markdown('<div class="bottom-bar">', unsafe_allow_html=True)
 
 # Quick Questions
-st.markdown("#### Quick Questions")
+st.markdown("** Quick Questions**")
 
 preset_questions = [
     "Prepare me for my doctor's visit",
