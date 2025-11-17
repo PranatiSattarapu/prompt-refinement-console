@@ -251,38 +251,56 @@ def api_get_files_in_folder(service, folder_id):
 
 def api_get_file_content(service, file_id, mime_type):
     """
-    Downloads the content of a file. Exports Google Workspace files to plain text.
-    Returns content as a string.
+    Downloads the content of a file.
+    Handles:
+    - Google Docs → export as text
+    - .txt / .pdf / others → download raw
+    - .docx → extract text properly using python-docx
     """
     if not service:
         return ""
-    
-    request = None
-    
-    # Check if the file is a Google Workspace Document (Docs, Sheets, Slides, etc.)
-    if mime_type.startswith('application/vnd.google-apps'):
-        # Export Google Docs to plain text
-        target_mime = 'text/plain'
-        request = service.files().export(fileId=file_id, mimeType=target_mime)
-    else:
-        # Download binary file content (like .txt, .pdf, or other regular files)
-        request = service.files().get_media(fileId=file_id)
 
-    # Use MediaIoBaseDownload to handle streaming of the response
-    try:
+    # --- 1. Handle Google Docs format ---
+    if mime_type.startswith("application/vnd.google-apps"):
+        request = service.files().export(fileId=file_id, mimeType="text/plain")
         fh = io.BytesIO()
         downloader = MediaIoBaseDownload(fh, request)
         done = False
         while not done:
             status, done = downloader.next_chunk()
-            # print(f"Download progress: {int(status.progress() * 100)}%") # Uncomment for debug
-        
-        # Decode the content (assuming text-based content is expected)
-        return fh.getvalue().decode('utf-8', errors='ignore')
-        
+        return fh.getvalue().decode("utf-8", errors="ignore")
+
+    # --- 2. Handle DOCX files properly ---
+    if mime_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+        # Download DOCX as bytes first
+        request = service.files().get_media(fileId=file_id)
+        fh = io.BytesIO()
+        downloader = MediaIoBaseDownload(fh, request)
+        done = False
+        while not done:
+            status, done = downloader.next_chunk()
+
+        # Extract TEXT using python-docx
+        from docx import Document
+        doc = Document(io.BytesIO(fh.getvalue()))
+        full_text = "\n".join([para.text for para in doc.paragraphs])
+        return full_text
+
+    # --- 3. Handle normal binary/text files (.txt, etc.) ---
+    try:
+        request = service.files().get_media(fileId=file_id)
+        fh = io.BytesIO()
+        downloader = MediaIoBaseDownload(fh, request)
+        done = False
+        while not done:
+            status, done = downloader.next_chunk()
+
+        return fh.getvalue().decode("utf-8", errors="ignore")
+
     except Exception as e:
-        print(f"Error downloading content for file ID {file_id}: {e}")
-        return f"Error retrieving content for file ID {file_id}."
+        print(f"Error retrieving file content for file ID {file_id}: {e}")
+        return f"Error retrieving content for file {file_id}."
+
 
 # ----------------------------------------------------------------------
 # 4. Application Logic Functions
