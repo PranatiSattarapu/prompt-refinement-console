@@ -81,6 +81,7 @@ active_messages = st.session_state.sessions[st.session_state.current_session]
 for message in active_messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
+# --- Quick Questions ---
 st.subheader("Quick Questions")
 
 preset_questions = [
@@ -92,42 +93,41 @@ preset_questions = [
 
 cols = st.columns(len(preset_questions))
 
-clicked_question = None
+# store preset click in session_state
+if "preset_query" not in st.session_state:
+    st.session_state.preset_query = None
+
 for i, q in enumerate(preset_questions):
     if cols[i].button(q):
-        clicked_question = q
+        st.session_state.preset_query = q
+        st.rerun()
 
 
-# 3. Handle new query submission via st.chat_input
+# --- Chat Input (always visible) ---
+chatbox = st.chat_input("Enter your medical question:")
+
+# Decide final query
 query = None
 
-# If user clicked a preset question → send it
-if clicked_question:
-    query = clicked_question
-else:
-    # Otherwise use chat input normally
-    query = st.chat_input("Enter your medical question:")
+if st.session_state.preset_query:
+    query = st.session_state.preset_query
+    st.session_state.preset_query = None  # clear after using
+elif chatbox:
+    query = chatbox
 
+
+# --- Process query ---
 if query:
-    # --- A. Display User Message ---
-    # Add user message to history
     active_messages.append({"role": "user", "content": query})
-    # Display the user message immediately
+
     with st.chat_message("user"):
         st.markdown(query)
 
-    # --- B. Get and Display Assistant Response ---
     with st.chat_message("assistant"):
         with st.spinner("Claude is thinking..."):
-            # Pass the query to the workflow function
             answer = generate_response(query)
-        
-        # Display the final response
         st.markdown(answer)
-        
-    # --- C. Store Assistant Response ---
-    # Add assistant message to history so it persists
+
     active_messages.append({"role": "assistant", "content": answer})
 
-    # Update the session state with the modified active_messages list (important for dictionaries)
     st.session_state.sessions[st.session_state.current_session] = active_messages
