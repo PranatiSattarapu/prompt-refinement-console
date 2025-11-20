@@ -142,7 +142,7 @@ User's question: {user_query}
 
     # 5. Send to Claude
     response = client.messages.create(
-        model="claude-3-opus-20240229",
+        model="cclaude-sonnet-4-20250514",
         max_tokens=1500,
         system=system_prompt,
         messages=[{"role": "user", "content": user_message}],
