@@ -251,3 +251,12 @@ def delete_file(file_id):
         print(f"File ID {file_id} deleted.")
     except Exception as e:
         print(f"Error deleting file {file_id}: {e}")
+def get_guideline_filenames():
+    """Return only filenames (not content) for guidelines."""
+    service = get_drive_service()
+    if not service:
+        return []
+
+    guideline_files = api_get_files_in_folder(service, FOLDER_ID_GUIDELINES)
+
+    return [{"id": f["id"], "name": f["name"], "mimeType": f["mimeType"]} for f in guideline_files]
