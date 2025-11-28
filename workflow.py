@@ -1,151 +1,262 @@
-from anthropic import Anthropic
-import io
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
+from google.oauth2 import service_account
 import os
+import io
+import json
 import streamlit as st
-from rapidfuzz import fuzz
 
-from drive_manager import (
-    list_data_files,
-    get_drive_service,
-    api_get_files_in_folder,
-    api_get_file_content,
-    FOLDER_ID_PROMPT_FRAMEWORK
-)
+# ----------------------------------------------------------------------
+# 1. Configuration (IDs and Scopes)
+# ----------------------------------------------------------------------
+FOLDER_ID_PATIENT_DATA = "17CdWnoybK0R7pKsdug7Oxo-Xd4iUVRCX"
+FOLDER_ID_GUIDELINES = "1Wj-O-q9MCdYQz4Uo4zkNFtgPexbTj5rn"
+FOLDER_ID_PROMPT_FRAMEWORK = "1A8oN2RYZMdOCZRmsC6d1kdyeAjzdzfw1"
 
-client = Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
+SCOPES = ["https://www.googleapis.com/auth/drive"]
 
-
-# ---------------------------------------------------------
-# LOAD ALL FRAMEWORKS
-# ---------------------------------------------------------
-def load_frameworks():
-    """Load all framework files, extract function names, and show detailed logs."""
-    print("\n========================")
-    print("🔎 Loading framework files...")
-    print("========================\n")
-
-    service = get_drive_service()
-
-    print("📁 Framework folder ID:", FOLDER_ID_PROMPT_FRAMEWORK)
-
-    # Get files in the framework folder
-    framework_files = api_get_files_in_folder(service, FOLDER_ID_PROMPT_FRAMEWORK)
-
-    print("🗂 Files returned from Drive:", [f["name"] for f in framework_files])
-
-    frameworks = []
-
-    for f in framework_files:
-        print("\n--------------------------------")
-        print("📄 Reading file:", f["name"])
-        print("--------------------------------")
-
-        # Load full content
-        content = api_get_file_content(service, f["id"], f["mimeType"])
-
-        if not content:
-            print("⚠️ File content EMPTY or unreadable.")
-            continue
-
-        # Extract first line
-        first_line = content.split("\n")[0]
-        print("🔍 Raw first line:", repr(first_line))
-
-        # Remove BOM + whitespace
-        clean_first_line = first_line.lstrip("\ufeff").strip()
-        print("✨ Cleaned first line:", repr(clean_first_line))
-
-        # Check for Function header
-        if clean_first_line.lower().startswith("function:"):
-            function_name = clean_first_line.replace("Function:", "").strip()
-            print("✅ Framework detected. Function name:", function_name)
-
-            frameworks.append({
-                "name": function_name,
-                "content": content
-            })
-        else:
-            print("❌ This file does NOT start with 'Function:' — skipped.")
-
-    print("\n📊 Total frameworks loaded:", len(frameworks))
-    print("========================\n")
-
-    return frameworks
+# ----------------------------------------------------------------------
+# 2. Authentication
+# ----------------------------------------------------------------------
+def get_drive_service():
+    """Loads Google service account from Streamlit Secrets."""
+    try:
+        service_account_info = json.loads(st.secrets["GOOGLE_SERVICE_ACCOUNT"])
+        creds = service_account.Credentials.from_service_account_info(
+            service_account_info, scopes=SCOPES
+        )
+        service = build("drive", "v3", credentials=creds)
+        return service
+    except Exception as e:
+        print(f"Error initializing Google Drive service: {e}")
+        return None
 
 
+# ----------------------------------------------------------------------
+# 3. File Listing
+# ----------------------------------------------------------------------
+def api_get_files_in_folder(service, folder_id):
+    """Retrieves metadata for non-trashed files within a specific folder ID."""
+    if not service:
+        return []
 
-# ---------------------------------------------------------
-# FUZZY MATCH CHOOSER
-# ---------------------------------------------------------
-def choose_best_framework(user_query, frameworks):
-    """Pick the closest matching framework using fuzzy matching."""
-    best_score = -1
-    best_framework = frameworks[0]
+    query = f"'{folder_id}' in parents and trashed=false"
 
-    for fw in frameworks:
-        score = fuzz.partial_ratio(user_query.lower(), fw["name"].lower())
-        if score > best_score:
-            best_score = score
-            best_framework = fw
-
-    print(f"🔍 Fuzzy Score: {best_score} for {best_framework['name']}")
-    return best_framework
-
-
-# ---------------------------------------------------------
-# MAIN RESPONSE GENERATOR
-# ---------------------------------------------------------
-def generate_response(user_query):
-    print("\n🔍 Starting generate_response()")
-    service = get_drive_service()
-    files = list_data_files()
-
-    print(f"📂 Total files found: {len(files)}")
-
-    # 1. Load and route frameworks
-    frameworks = load_frameworks()
-    best_fw = choose_best_framework(user_query, frameworks)
-
-    chosen_framework_name = best_fw["name"]
-    framework_text = best_fw["content"]
-
-    print(f"🧠 Chosen Framework: {chosen_framework_name}")
-
-    # 2. System prompt with chosen framework
-    system_prompt = f"""
-You MUST strictly follow the framework provided below.
-Do NOT ignore, modify, or override any part of it.
-
-=== FRAMEWORK START: {chosen_framework_name} ===
-{framework_text}
-=== FRAMEWORK END ===
-"""
-
-    # 3. Load patient data + guidelines
-    combined_text = ""
-    for f in files:
-        if f.get('source') in ['patient_data', 'guidelines']:
-            content = api_get_file_content(service, f["id"], f["mimeType"])
-            combined_text += f"\n\n---\nDocument: {f['name']}\n{content}"
-
-    # 4. Build user prompt
-    user_message = f"""Here is the user's health data and relevant guidelines:
-
-{combined_text}
-
----
-
-User's question: {user_query}
-"""
-
-    print("🧠 Sending to Claude...")
-
-    # 5. Send to Claude
-    response = client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=1500,
-        system=system_prompt,
-        messages=[{"role": "user", "content": user_message}],
+    results = (
+        service.files()
+        .list(q=query, fields="files(id, name, mimeType, modifiedTime)")
+        .execute()
     )
 
-    return response.content[0].text
+    return results.get("files", [])
+
+
+# ----------------------------------------------------------------------
+# 4. File Content Extraction (TXT + DOCX + GOOGLE DOCS + PDF + fallback)
+# ----------------------------------------------------------------------
+def api_get_file_content(service, file_id, mime_type):
+    """
+    Downloads the content of a file.
+    Handles:
+    - Google Docs → export to text
+    - DOCX → python-docx extraction
+    - PDF → pdfplumber extraction
+    - TXT or any unknown text → decode bytes
+    """
+    if not service:
+        return ""
+
+    # -------------------------------------------------------------
+    # (A) GOOGLE DOCS EXPORT
+    # -------------------------------------------------------------
+    if mime_type.startswith("application/vnd.google-apps"):
+        try:
+            request = service.files().export(
+                fileId=file_id, mimeType="text/plain"
+            )
+            fh = io.BytesIO()
+            downloader = MediaIoBaseDownload(fh, request)
+            done = False
+            while not done:
+                status, done = downloader.next_chunk()
+
+            return fh.getvalue().decode("utf-8", errors="ignore")
+
+        except Exception as e:
+            print(f"Error exporting Google Doc {file_id}: {e}")
+            return ""
+
+
+    # -------------------------------------------------------------
+    # (B) DOCX EXTRACTION
+    # -------------------------------------------------------------
+    if mime_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+        try:
+            request = service.files().get_media(fileId=file_id)
+            fh = io.BytesIO()
+            downloader = MediaIoBaseDownload(fh, request)
+
+            done = False
+            while not done:
+                status, done = downloader.next_chunk()
+
+            from docx import Document
+            doc = Document(io.BytesIO(fh.getvalue()))
+            full_text = "\n".join([p.text for p in doc.paragraphs])
+            return full_text
+
+        except Exception as e:
+            print(f"Error extracting DOCX {file_id}: {e}")
+            return ""
+
+
+    # -------------------------------------------------------------
+    # (C) PDF EXTRACTION USING pdfplumber  ✅ NEW
+    # -------------------------------------------------------------
+    if mime_type == "application/pdf":
+        try:
+            request = service.files().get_media(fileId=file_id)
+            fh = io.BytesIO()
+            downloader = MediaIoBaseDownload(fh, request)
+
+            done = False
+            while not done:
+                status, done = downloader.next_chunk()
+
+            import pdfplumber
+
+            text = ""
+            with pdfplumber.open(io.BytesIO(fh.getvalue())) as pdf:
+                for page in pdf.pages:
+                    extracted = page.extract_text()
+                    if extracted:
+                        text += extracted + "\n"
+
+            return text.strip()
+
+        except Exception as e:
+            print(f"Error extracting PDF {file_id}: {e}")
+            return ""
+
+
+    # -------------------------------------------------------------
+    # (D) DEFAULT BINARY/TEXT FALLBACK
+    # -------------------------------------------------------------
+    try:
+        request = service.files().get_media(fileId=file_id)
+        fh = io.BytesIO()
+        downloader = MediaIoBaseDownload(fh, request)
+
+        done = False
+        while not done:
+            status, done = downloader.next_chunk()
+
+        return fh.getvalue().decode("utf-8", errors="ignore")
+
+    except Exception as e:
+        print(f"Error retrieving file {file_id}: {e}")
+        return ""
+
+
+# ----------------------------------------------------------------------
+# 5. Combine All Files (Patient, Guidelines, Frameworks)
+# ----------------------------------------------------------------------
+def list_data_files():
+    service = get_drive_service()
+    if not service:
+        return []
+
+    patient_data_files = api_get_files_in_folder(service, FOLDER_ID_PATIENT_DATA)
+    guideline_files = api_get_files_in_folder(service, FOLDER_ID_GUIDELINES)
+    framework_files = api_get_files_in_folder(service, FOLDER_ID_PROMPT_FRAMEWORK)
+
+    for f in patient_data_files:
+        f["source"] = "patient_data"
+    for f in guideline_files:
+        f["source"] = "guidelines"
+    for f in framework_files:
+        f["source"] = "prompt_framework"
+
+    all_files = patient_data_files + guideline_files + framework_files
+    return sorted(all_files, key=lambda x: x["modifiedTime"], reverse=True)
+
+
+# ----------------------------------------------------------------------
+# 6. Framework Loader
+# ----------------------------------------------------------------------
+def get_framework_content():
+    service = get_drive_service()
+    if not service:
+        return ""
+
+    framework_files = api_get_files_in_folder(service, FOLDER_ID_PROMPT_FRAMEWORK)
+
+    full_framework_content = []
+
+    for file in framework_files:
+        print(f"Retrieving framework content: {file['name']}")
+        content = api_get_file_content(service, file["id"], file["mimeType"])
+
+        section = (
+            f"--- START OF PROMPT FRAMEWORK: {file['name']} ---\n"
+            f"{content}\n"
+            f"--- END OF PROMPT FRAMEWORK: {file['name']} ---"
+        )
+
+        full_framework_content.append(section)
+
+    return "\n\n".join(full_framework_content)
+
+
+# ----------------------------------------------------------------------
+# 7. Upload File
+# ----------------------------------------------------------------------
+def upload_file(uploaded_file):
+    service = get_drive_service()
+    if not service:
+        return "Upload failed: Service not initialized."
+
+    target_folder_id = FOLDER_ID_PATIENT_DATA
+    temp_path = uploaded_file.name
+
+    try:
+        with open(temp_path, "wb") as f:
+            f.write(uploaded_file.getbuffer())
+
+        file_metadata = {"name": uploaded_file.name, "parents": [target_folder_id]}
+        media = MediaFileUpload(temp_path, resumable=True)
+        service.files().create(body=file_metadata, media_body=media, fields="id").execute()
+
+        os.remove(temp_path)
+        return uploaded_file.name
+
+    except Exception as e:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+
+        print(f"Upload failed: {e}")
+        return f"Upload failed: {e}"
+
+
+# ----------------------------------------------------------------------
+# 8. Delete File
+# ----------------------------------------------------------------------
+def delete_file(file_id):
+    service = get_drive_service()
+    if not service:
+        return
+
+    try:
+        service.files().delete(fileId=file_id).execute()
+        print(f"File ID {file_id} deleted.")
+    except Exception as e:
+        print(f"Error deleting file {file_id}: {e}")
+def get_guideline_filenames():
+    """Return only filenames (not content) for guidelines."""
+    service = get_drive_service()
+    if not service:
+        return []
+
+    guideline_files = api_get_files_in_folder(service, FOLDER_ID_GUIDELINES)
+
+    return [{"id": f["id"], "name": f["name"], "mimeType": f["mimeType"]} for f in guideline_files]
